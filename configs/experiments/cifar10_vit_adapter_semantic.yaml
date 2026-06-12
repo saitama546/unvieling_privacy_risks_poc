@@ -1,4 +1,3 @@
-```yaml
 experiment:
   name: cifar10_vit_adapter_semantic
   seed: 0
@@ -25,9 +24,18 @@ model:
   num_classes: auto
   freeze_backbone: true
 
+
 peft:
-  method: adapter
-  bottleneck_dim: 64
+  method: 
+    - adapter
+    - lora   # options: adapter, lora
+  adapter:
+    bottleneck_dim: 64
+
+  lora:
+    rank: 8
+    alpha: 16
+    dropout: 0.0
 
 fl:
   protocol: fedsgd
@@ -61,4 +69,5 @@ metrics:
   - lpips
   - gradient_loss
   - clip_similarity
-```
+  - tv_loss
+
