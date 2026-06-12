@@ -1,20 +1,28 @@
+```yaml
 experiment:
   name: cifar10_vit_adapter_semantic
   seed: 0
   output_dir: results/cifar10_vit_adapter_semantic_seed0
 
 dataset:
+  source: huggingface
   name: cifar10
-  data_dir: data
+  hf_path: uoft-cs/cifar10
+  train_split: train
+  image_column: img
+  label_column: label
+
   image_size: 224
   num_clients: 2
-  private_batch_size: 1
-  public_batch_size: 32
+  batch_size: 1
+  num_workers: 2
+  split: iid
+  shuffle: true
 
 model:
   backbone: vit_tiny_patch16_224
   pretrained: true
-  num_classes: 10
+  num_classes: auto
   freeze_backbone: true
 
 peft:
@@ -36,7 +44,7 @@ attack:
     - gradient_correct_query
     - gradient_wrong_query
     - text_only
-  steps: 1000
+  steps: 10000
   lr: 0.1
   lambda_grad: 1.0
   lambda_clip: 0.01
@@ -53,3 +61,4 @@ metrics:
   - lpips
   - gradient_loss
   - clip_similarity
+```
