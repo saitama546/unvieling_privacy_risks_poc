@@ -1,0 +1,55 @@
+experiment:
+  name: cifar10_vit_adapter_semantic
+  seed: 0
+  output_dir: results/cifar10_vit_adapter_semantic_seed0
+
+dataset:
+  name: cifar10
+  data_dir: data
+  image_size: 224
+  num_clients: 2
+  private_batch_size: 1
+  public_batch_size: 32
+
+model:
+  backbone: vit_tiny_patch16_224
+  pretrained: true
+  num_classes: 10
+  freeze_backbone: true
+
+peft:
+  method: adapter
+  bottleneck_dim: 64
+
+fl:
+  protocol: fedsgd
+  num_rounds: 1
+  clients_per_round: 1
+  local_epochs: 1
+  local_lr: 0.001
+  share: adapter_gradients
+
+attack:
+  enabled: true
+  modes:
+    - gradient_only
+    - gradient_correct_query
+    - gradient_wrong_query
+    - text_only
+  steps: 1000
+  lr: 0.1
+  lambda_grad: 1.0
+  lambda_clip: 0.01
+  lambda_tv: 0.001
+  init: random_noise
+
+queries:
+  correct: "a photo of a frog"
+  wrong: "a photo of a truck"
+
+metrics:
+  - psnr
+  - ssim
+  - lpips
+  - gradient_loss
+  - clip_similarity

@@ -1,0 +1,11 @@
+torch
+torchvision
+timm
+numpy
+pandas
+matplotlib
+pyyaml
+tqdm
+scikit-image
+lpips
+open_clip_torch
