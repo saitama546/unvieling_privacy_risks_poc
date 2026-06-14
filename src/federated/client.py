@@ -59,6 +59,9 @@ class FLClient:
 
         self.device = device
         self.local_model = None
+        self.last_private_batch = None
+        
+      
 
     def set_model(self, model: nn.Module) -> None:
         """
@@ -163,6 +166,10 @@ class FLClient:
         self.local_model.zero_grad(set_to_none=True)
 
         images, labels = self.get_one_batch()
+        self.last_private_batch = {
+                    "images": images.detach().clone().cpu(),
+                    "labels": labels.detach().clone().cpu(),
+                }
 
         logits = self.local_model(images)
 
@@ -198,7 +205,26 @@ class FLClient:
             "share_type": share_type,
         }
 
-    
+    def get_last_private_batch(self) -> Dict[str, torch.Tensor]:
+        """
+        Description:
+            Return the last private batch used by this client for gradient computation.
+
+            This is for evaluation only. It must not be sent to the server.
+
+        INPUTS:
+            None.
+
+        OUTPUTS:
+            Dict[str, torch.Tensor]: Dictionary containing reference images and labels.
+        """
+        if self.last_private_batch is None:
+            raise RuntimeError(
+                "No private batch stored yet. "
+                "Call compute_fedsgd_gradient() first."
+            )
+
+        return self.last_private_batch
 
     def print_client_summary(self) -> None:
         """

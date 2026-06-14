@@ -43,7 +43,7 @@ fl:
   clients_per_round: 1
   local_epochs: 1
   local_lr: 0.001
-  share: adapter_gradients
+  share: peft_gradients
 
 attack:
   enabled: true

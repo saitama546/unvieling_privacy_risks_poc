@@ -89,10 +89,6 @@ class FLServer:
         """
         Description:
             Receive and store one client's FedSGD gradient package.
-
-            The gradient package should contain gradients only. It should not
-            contain private images or labels.
-
         INPUTS:
             gradient_package (Dict[str, Any]): Dictionary returned by
                 FLClient.compute_fedsgd_gradient().
