@@ -2,10 +2,13 @@ import argparse
 from typing import Any, Dict
 import os
 import sys
+
 import torch
 import yaml
+
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJECT_ROOT)
+
 from src.datasets.dataset_loader import build_federated_dataloaders
 from src.models.global_model import (
     build_global_model,
@@ -14,6 +17,7 @@ from src.models.global_model import (
 from src.federated.server import FLServer
 from src.federated.client import FLClient
 from src.attacks.gradient_inversion import reconstruct_gradient_only
+from src.metrics.metrics import compute_metrics
 
 
 def load_config(config_path: str) -> Dict[str, Any]:
@@ -203,10 +207,11 @@ def test_fedsgd_client_gradient(
     client_train_loaders,
     dataset_info: Dict[str, Any],
     peft_method: str,
-) -> None:
+) -> Dict[str, Any]:
     """
     Description:
-        Test one FedSGD client gradient computation and run Step 8 and Step 9.
+        Test one FedSGD client gradient computation, server storage,
+        attack gradient extraction, gradient-only reconstruction, and metrics.
 
     INPUTS:
         config (Dict[str, Any]): Full experiment config.
@@ -215,7 +220,8 @@ def test_fedsgd_client_gradient(
         peft_method (str): PEFT method, for example "adapter" or "lora".
 
     OUTPUTS:
-        None.
+        Dict[str, Any]: Result dictionary containing attack_data,
+            reconstruction_result, and metrics.
     """
     print(f"\n========== Testing PEFT Method: {peft_method} ==========")
 
@@ -319,7 +325,26 @@ def test_fedsgd_client_gradient(
     print("Final TV loss:", reconstruction_result["final_tv_loss"])
     print("===================================\n")
 
+    # Step 9.5: Metrics.
+    metrics = compute_metrics(
+        reference_image=attack_data["reference_images"],
+        reconstructed_image=reconstruction_result["reconstructed_image"],
+        gradient_loss=reconstruction_result["final_gradient_loss"],
+    )
+
+    print("\n========== Metrics ==========")
+    for key, value in metrics.items():
+        print(f"{key}: {value}")
+    print("=============================\n")
+
     print(f"Finished test for PEFT method: {peft_method}")
+
+    return {
+        "peft_method": peft_method,
+        "attack_data": attack_data,
+        "reconstruction_result": reconstruction_result,
+        "metrics": metrics,
+    }
 
 
 def run_experiment(config_path: str) -> None:
@@ -354,13 +379,24 @@ def run_experiment(config_path: str) -> None:
     print(peft_methods)
     print("==========================================\n")
 
+    all_results = {}
+
     for peft_method in peft_methods:
-        test_fedsgd_client_gradient(
+        result = test_fedsgd_client_gradient(
             config=config,
             client_train_loaders=client_train_loaders,
             dataset_info=dataset_info,
             peft_method=peft_method,
         )
+
+        all_results[peft_method] = result
+
+    print("\n========== Final Metrics Summary ==========")
+    for peft_method, result in all_results.items():
+        print(f"\nPEFT method: {peft_method}")
+        for key, value in result["metrics"].items():
+            print(f"  {key}: {value}")
+    print("===========================================\n")
 
     print("\nAll tests completed.")
 
