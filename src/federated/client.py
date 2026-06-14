@@ -1,0 +1,153 @@
+from typing import Any, Dict, Optional, Tuple
+
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
+
+
+class FLClient:
+    """
+    Description:
+        Federated Learning client class that stores a private client DataLoader,
+        client metadata, device information, and a local model received from the
+        server.
+
+    INPUTS:
+        client_id (int): Unique integer ID for the client.
+        train_loader (DataLoader): Private training DataLoader for this client.
+        config (Dict[str, Any]): Full experiment configuration dictionary.
+        device (Optional[torch.device]): Device where client computation runs.
+            If None, CUDA is used when available; otherwise CPU is used.
+
+    OUTPUTS:
+        FLClient: Client object containing private DataLoader and local model state.
+    """
+
+    def __init__(
+        self,
+        client_id: int,
+        train_loader: DataLoader,
+        config: Dict[str, Any],
+        device: Optional[torch.device] = None,
+    ):
+        """
+        Description:
+            Initialize the FL client with client ID, private train DataLoader,
+            config, device, and empty local model.
+
+        INPUTS:
+            client_id (int): Unique integer ID for the client.
+            train_loader (DataLoader): Private training DataLoader for this client.
+            config (Dict[str, Any]): Full experiment configuration dictionary.
+            device (Optional[torch.device]): Device for client computation.
+                If None, automatically selects CUDA if available, else CPU.
+
+        OUTPUTS:
+            None: Initializes client attributes.
+        """
+        self.client_id = client_id
+        self.train_loader = train_loader
+        self.config = config
+        self.fl_config = config["fl"]
+
+        if device is None:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        self.device = device
+        self.local_model = None
+
+    def set_model(self, model: nn.Module) -> None:
+        """
+        Description:
+            Store a local model copy received from the server.
+
+        INPUTS:
+            model (nn.Module): Model copy sent by the FL server.
+
+        OUTPUTS:
+            None: Stores model in self.local_model and moves it to client device.
+        """
+        self.local_model = model.to(self.device)
+
+    def has_model(self) -> bool:
+        """
+        Description:
+            Check whether the client currently has a local model.
+
+        INPUTS:
+            None.
+
+        OUTPUTS:
+            bool: True if self.local_model is not None, otherwise False.
+        """
+        return self.local_model is not None
+
+    def get_one_batch(self) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Description:
+            Get one private batch from the client's train DataLoader.
+
+            This batch will later be used in Step 6 to compute FedSGD gradients.
+
+        INPUTS:
+            None.
+
+        OUTPUTS:
+            Tuple[torch.Tensor, torch.Tensor]:
+                images (torch.Tensor): Private image batch with shape [B, C, H, W].
+                labels (torch.Tensor): Label tensor with shape [B].
+        """
+        images, labels = next(iter(self.train_loader))
+
+        images = images.to(self.device)
+        labels = labels.to(self.device)
+
+        return images, labels
+
+    def get_num_samples(self) -> int:
+        """
+        Description:
+            Return the number of private training samples owned by this client.
+
+        INPUTS:
+            None.
+
+        OUTPUTS:
+            int: Number of samples in the client's private train dataset.
+        """
+        return len(self.train_loader.dataset)
+
+    def get_num_batches(self) -> int:
+        """
+        Description:
+            Return the number of batches in the client's private train DataLoader.
+
+        INPUTS:
+            None.
+
+        OUTPUTS:
+            int: Number of batches in the client's private train DataLoader.
+        """
+        return len(self.train_loader)
+
+    def print_client_summary(self) -> None:
+        """
+        Description:
+            Print a sanity-check summary of the FL client state.
+
+        INPUTS:
+            None.
+
+        OUTPUTS:
+            None: Prints client information to the console.
+        """
+        print(f"\n========== FL Client {self.client_id} Summary ==========")
+        print(f"Device: {self.device}")
+        print(f"Private samples: {self.get_num_samples()}")
+        print(f"Private batches: {self.get_num_batches()}")
+        print(f"Has local model: {self.has_model()}")
+
+        if self.local_model is not None:
+            print(f"Local model class: {self.local_model.__class__.__name__}")
+
+        print("=================================================\n")
