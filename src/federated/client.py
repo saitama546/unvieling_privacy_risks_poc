@@ -3,6 +3,10 @@ from typing import Any, Dict, Optional, Tuple
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from src.models.global_model import (
+    get_peft_named_parameters,
+    get_trainable_named_parameters,
+)
 
 
 class FLClient:
@@ -129,6 +133,72 @@ class FLClient:
             int: Number of batches in the client's private train DataLoader.
         """
         return len(self.train_loader)
+    
+    def compute_fedsgd_gradient(self) -> Dict[str, Any]:
+        """
+        Description:
+            Compute FedSGD gradients using one private client batch.
+
+            The client uses its local model copy, takes one batch from its
+            private DataLoader, computes classification loss, backpropagates,
+            and extracts gradients according to config["fl"]["share"].
+
+            Private images and labels are NOT shared with the server.
+
+        INPUTS:
+            None.
+
+        OUTPUTS:
+            Dict[str, Any]: Dictionary containing client ID, loss value,
+                selected shared gradients, and share type.
+        """
+        if self.local_model is None:
+            raise RuntimeError(
+                "Client has no local model. Call set_model() before computing gradients."
+            )
+
+        share_type = self.fl_config.get("share", "peft_gradients")
+
+        self.local_model.train()
+        self.local_model.zero_grad(set_to_none=True)
+
+        images, labels = self.get_one_batch()
+
+        logits = self.local_model(images)
+
+        loss_fn = nn.CrossEntropyLoss()
+        loss = loss_fn(logits, labels)
+
+        loss.backward()
+
+        if share_type == "peft_gradients":
+            named_params = get_peft_named_parameters(self.local_model)
+
+        elif share_type == "trainable_gradients":
+            named_params = get_trainable_named_parameters(self.local_model)
+
+        else:
+            raise ValueError(
+                f"Unsupported fl.share value: {share_type}. "
+                f"Supported values: peft_gradients, trainable_gradients"
+            )
+
+        gradients = {}
+
+        for name, param in named_params:
+            if param.grad is None:
+                raise RuntimeError(f"Gradient for parameter {name} is None.")
+
+            gradients[name] = param.grad.detach().clone().cpu()
+
+        return {
+            "client_id": self.client_id,
+            "loss": float(loss.item()),
+            "gradients": gradients,
+            "share_type": share_type,
+        }
+
+    
 
     def print_client_summary(self) -> None:
         """
@@ -151,3 +221,5 @@ class FLClient:
             print(f"Local model class: {self.local_model.__class__.__name__}")
 
         print("=================================================\n")
+        
+    
