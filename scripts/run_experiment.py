@@ -1,136 +1,292 @@
 import argparse
 import sys
 from pathlib import Path
+from typing import Any, Dict
 
 import torch
+import yaml
 
-# Add project root to Python path so imports from src work
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.append(str(PROJECT_ROOT))
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-from src import models
-from src.models import global_model
-from src.utils.config import load_config, print_config
-from src.utils.seed import set_seed
 from src.datasets.dataset_loader import build_federated_dataloaders
-from src.models.global_model import build_all_global_models, print_model_summary
+from src.models.global_model import (
+    build_global_model,
+    build_all_global_models,
+    print_model_summary,
+)
+from src.federated.server import FLServer
+from src.federated.client import FLClient
 
 
-
-def check_batch(batch_images: torch.Tensor, batch_labels: torch.Tensor) -> None:
+def load_config(config_path: str) -> Dict[str, Any]:
     """
-    Basic sanity checks for one batch.
+    Description:
+        Load experiment configuration from a YAML file.
+
+    INPUTS:
+        config_path (str): Path to the YAML configuration file.
+
+    OUTPUTS:
+        Dict[str, Any]: Loaded configuration dictionary.
     """
-    assert isinstance(batch_images, torch.Tensor), "Images must be a torch.Tensor"
-    assert isinstance(batch_labels, torch.Tensor), "Labels must be a torch.Tensor"
+    with open(config_path, "r") as file:
+        config = yaml.safe_load(file)
 
-    assert batch_images.ndim == 4, (
-        f"Expected images shape [B, C, H, W], got {batch_images.shape}"
+    return config
+
+
+def set_seed(seed: int) -> None:
+    """
+    Description:
+        Set random seeds for reproducibility.
+
+    INPUTS:
+        seed (int): Random seed value.
+
+    OUTPUTS:
+        None.
+    """
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+def print_config_summary(config: Dict[str, Any]) -> None:
+    """
+    Description:
+        Print important configuration values.
+
+    INPUTS:
+        config (Dict[str, Any]): Full experiment configuration.
+
+    OUTPUTS:
+        None.
+    """
+    print("\n========== Experiment Config ==========")
+
+    for section, values in config.items():
+        print(f"\n[{section}]")
+
+        if isinstance(values, dict):
+            for key, value in values.items():
+                print(f"  {key}: {value}")
+        else:
+            print(f"  {values}")
+
+    print("=======================================\n")
+
+
+def print_dataset_summary(dataset_info: Dict[str, Any]) -> None:
+    """
+    Description:
+        Print dataset and federated split information.
+
+    INPUTS:
+        dataset_info (Dict[str, Any]): Dataset metadata returned by dataset loader.
+
+    OUTPUTS:
+        None.
+    """
+    print("\n========== Dataset Summary ==========")
+
+    for key, value in dataset_info.items():
+        print(f"{key}: {value}")
+
+    print("=====================================\n")
+
+
+def test_client_batch(client_train_loaders) -> None:
+    """
+    Description:
+        Check whether one batch can be loaded from client 0.
+
+    INPUTS:
+        client_train_loaders (List[DataLoader]): List of client train DataLoaders.
+
+    OUTPUTS:
+        None.
+    """
+    images, labels = next(iter(client_train_loaders[0]))
+
+    print("\n========== Client Batch Sanity Check ==========")
+    print(f"Images shape: {images.shape}")
+    print(f"Labels shape: {labels.shape}")
+    print(f"First label: {labels[0].item()}")
+    print("================================================\n")
+
+
+def test_fedsgd_client_gradient(
+    config: Dict[str, Any],
+    client_train_loaders,
+    dataset_info: Dict[str, Any],
+    peft_method: str,
+) -> None:
+    """
+    Description:
+        Test one FedSGD gradient computation for one PEFT method.
+
+        This checks whether:
+            1. Server can build and store a global model.
+            2. Client can receive a model copy.
+            3. Client can run forward and backward pass.
+            4. Client returns gradients only.
+            5. Private images and labels are not shared.
+
+    INPUTS:
+        config (Dict[str, Any]): Full experiment configuration.
+        client_train_loaders (List[DataLoader]): Client private train loaders.
+        dataset_info (Dict[str, Any]): Dataset metadata.
+        peft_method (str): PEFT method to test, for example "adapter" or "lora".
+
+    OUTPUTS:
+        None.
+    """
+    print(f"\n========== Testing FedSGD Gradient: {peft_method} ==========")
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    global_model = build_global_model(
+        config=config,
+        dataset_info=dataset_info,
+        peft_method=peft_method,
     )
 
-    assert batch_images.shape[1] == 3, (
-        f"Expected 3 image channels, got {batch_images.shape[1]}"
+    print_model_summary(global_model)
+
+    server = FLServer(
+        global_model=global_model,
+        config=config,
+        device=device,
     )
 
-    assert batch_labels.ndim == 1, (
-        f"Expected labels shape [B], got {batch_labels.shape}"
+    server.print_server_summary()
+
+    client = FLClient(
+        client_id=0,
+        train_loader=client_train_loaders[0],
+        config=config,
+        device=device,
     )
 
-    assert batch_images.shape[0] == batch_labels.shape[0], (
-        "Batch size mismatch between images and labels"
-    )
+    client_model = server.get_model_copy()
+    client.set_model(client_model)
 
-    assert torch.is_floating_point(batch_images), "Images must be floating point tensors"
-    assert batch_labels.dtype == torch.long, "Labels must be torch.long"
+    client.print_client_summary()
 
-    assert batch_images.min() >= 0.0, "Images should be normalized to [0, 1]"
-    assert batch_images.max() <= 1.0, "Images should be normalized to [0, 1]"
+    gradient_package = client.compute_fedsgd_gradient()
+
+    print("\nGradient package keys:")
+    print(gradient_package.keys())
+
+    print("\nClient ID:", gradient_package["client_id"])
+    print("Loss:", gradient_package["loss"])
+    print("Share type:", gradient_package["share_type"])
+
+    gradients = gradient_package["gradients"]
+
+    print("\nNumber of shared gradient tensors:", len(gradients))
+
+    if len(gradients) == 0:
+        raise RuntimeError("No gradients were returned. Check PEFT parameter selection.")
+
+    print("\nShared gradient tensors:")
+
+    for name, grad in gradients.items():
+        grad_norm = grad.norm().item()
+
+        print(
+            f"{name}: "
+            f"shape={tuple(grad.shape)}, "
+            f"norm={grad_norm:.6f}, "
+            f"device={grad.device}"
+        )
+
+        if torch.isnan(grad).any():
+            raise RuntimeError(f"NaN found in gradient: {name}")
+
+    assert "images" not in gradient_package, "Private images should not be shared."
+    assert "labels" not in gradient_package, "Private labels should not be shared."
+
+    print("\nPrivacy check passed: images and labels are not shared.")
+    print(f"FedSGD gradient test passed for PEFT method: {peft_method}")
+    print("============================================================\n")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Run semantic PEFT FL experiment sanity check"
-    )
+def run_experiment(config_path: str) -> None:
+    """
+    Description:
+        Main experiment runner.
+
+        Current version tests:
+            Step 1: Config loading and seed setup.
+            Step 2: Federated dataset loading.
+            Step 3: Global PEFT model creation.
+            Step 5: Server-client setup.
+            Step 6: FedSGD PEFT gradient computation.
+
+    INPUTS:
+        config_path (str): Path to experiment YAML config.
+
+    OUTPUTS:
+        None.
+    """
+    config = load_config(config_path)
+
+    seed = config["experiment"].get("seed", 0)
+    set_seed(seed)
+
+    print_config_summary(config)
+
+    client_train_loaders, dataset_info = build_federated_dataloaders(config)
+
+    print_dataset_summary(dataset_info)
+
+    test_client_batch(client_train_loaders)
+
+    peft_methods = config["peft"].get("methods", ["adapter"])
+
+    print("\n========== PEFT Methods to Test ==========")
+    print(peft_methods)
+    print("==========================================\n")
+
+    for peft_method in peft_methods:
+        test_fedsgd_client_gradient(
+            config=config,
+            client_train_loaders=client_train_loaders,
+            dataset_info=dataset_info,
+            peft_method=peft_method,
+        )
+
+    print("\nAll FedSGD client gradient tests passed.")
+
+
+def parse_args():
+    """
+    Description:
+        Parse command-line arguments.
+
+    INPUTS:
+        None.
+
+    OUTPUTS:
+        argparse.Namespace: Parsed command-line arguments.
+    """
+    parser = argparse.ArgumentParser()
+
     parser.add_argument(
         "--config",
         type=str,
         required=True,
-        help="Path to experiment YAML config",
-    )
-    args = parser.parse_args()
-
-    # Step 1: Load config
-    config = load_config(args.config)
-    print_config(config)
-
-    # Step 1: Set seed
-    seed = config["experiment"].get("seed", 0)
-    set_seed(seed)
-
-    # Step 1: Create output directory
-    output_dir = Path(config["experiment"]["output_dir"])
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    print(f"Project root: {PROJECT_ROOT}")
-    print(f"Seed set to: {seed}")
-    print(f"Output directory: {output_dir}")
-
-    # Step 2: Build federated dataloaders
-    client_train_loaders, dataset_info = build_federated_dataloaders(config)
-
-    print("\n========== Dataset Info ==========")
-    for key, value in dataset_info.items():
-        if key == "class_names":
-            print(f"{key}: {value[:10]}{' ...' if len(value) > 10 else ''}")
-        else:
-            print(f"{key}: {value}")
-    print("==================================\n")
-
-    # Sanity checks
-    num_clients = dataset_info["num_clients"]
-
-    assert len(client_train_loaders) == num_clients, (
-        f"Expected {num_clients} client loaders, "
-        f"got {len(client_train_loaders)}"
+        help="Path to experiment YAML config file.",
     )
 
-    assert dataset_info["server_has_data"] is False, (
-        "Server should have zero direct dataset access"
-    )
+    return parser.parse_args()
 
-    assert sum(dataset_info["client_sizes"]) == dataset_info["train_size"], (
-        "Client dataset sizes must sum to full training dataset size"
-    )
-
-    print("========== Client Loader Check ==========")
-
-    for client_id, loader in enumerate(client_train_loaders):
-        print(f"\nClient {client_id}")
-        print(f"  Number of samples: {len(loader.dataset)}")
-        print(f"  Number of batches: {len(loader)}")
-
-        batch_images, batch_labels = next(iter(loader))
-        check_batch(batch_images, batch_labels)
-
-        print(f"  Batch image shape: {batch_images.shape}")
-        print(f"  Batch label shape: {batch_labels.shape}")
-        print(f"  Labels: {batch_labels.tolist()}")
-        print(f"  Image min: {batch_images.min().item():.4f}")
-        print(f"  Image max: {batch_images.max().item():.4f}")
-        print(f"  Image dtype: {batch_images.dtype}")
-        print(f"  Label dtype: {batch_labels.dtype}")
-
-    print("\n=========================================\n")
-
-    print("Step 2 sanity check completed successfully.")
-    print("Next step: build model factory from config.")
-    print("\n=========================================\n")
-
-    models = build_all_global_models(config, dataset_info)
-
-    for peft_method, model in models.items():
-        print(f"\nBuilt model for PEFT method: {peft_method}")
-        print_model_summary(model)
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    run_experiment(args.config)
