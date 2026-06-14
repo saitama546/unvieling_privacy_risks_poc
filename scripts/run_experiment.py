@@ -225,6 +225,7 @@ def test_fedsgd_client_gradient(
     """
     print(f"\n========== Testing PEFT Method: {peft_method} ==========")
 
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Step 3: Build global PEFT model.
@@ -257,8 +258,11 @@ def test_fedsgd_client_gradient(
     client_model = server.get_model_copy()
     client.set_model(client_model)
 
-    client.print_client_summary()
+    # Save the exact same global model state for reconstruction.
+    # This must happen before any server update.
+    attack_model = server.get_model_copy()
 
+    client.print_client_summary()
     # Step 6: Client computes FedSGD gradient.
     gradient_package = client.compute_fedsgd_gradient()
 
@@ -308,13 +312,12 @@ def test_fedsgd_client_gradient(
     # Important: this must happen before server.run_fedsgd_server_update(),
     # because the attack model must match the model used to compute client gradients.
     reconstruction_result = reconstruct_gradient_only(
-        model=server.get_model_copy(),
-        observed_gradients=attack_data["observed_gradients"],
-        labels=attack_data["reference_labels"],
-        reference_shape=tuple(attack_data["reference_images"].shape),
-        config=config,
-        share_type=attack_data["share_type"],
-    )
+    model=attack_model,
+    observed_gradients=attack_data["observed_gradients"],
+    labels=attack_data["reference_labels"],
+    reference_shape=tuple(attack_data["reference_images"].shape),
+    config=config,
+    share_type=attack_data["share_type"])
 
     print("\n========== Step 9 Result ==========")
     print(

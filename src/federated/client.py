@@ -60,6 +60,8 @@ class FLClient:
         self.device = device
         self.local_model = None
         self.last_private_batch = None
+        self.device = device
+
         
       
 
@@ -222,6 +224,27 @@ class FLClient:
             raise RuntimeError(
                 "No private batch stored yet. "
                 "Call compute_fedsgd_gradient() first."
+            )
+
+        return self.last_private_batch
+    
+    def get_last_private_batch(self) -> Dict[str, torch.Tensor]:
+        """
+        Description:
+            Return the last private batch used by this client to compute gradients.
+
+            This is for evaluation only. It must not be sent to the server.
+
+        INPUTS:
+            None.
+
+        OUTPUTS:
+            Dict[str, torch.Tensor]: Private reference images and labels.
+        """
+        if self.last_private_batch is None:
+            raise RuntimeError(
+                "No private batch stored yet. "
+                "Call compute_fedsgd_gradient() before get_last_private_batch()."
             )
 
         return self.last_private_batch
